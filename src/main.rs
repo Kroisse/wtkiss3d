@@ -1,8 +1,10 @@
-use std::borrow::Cow;
 use std::cell::RefCell;
-use std::io::Read;
+use std::io;
 use std::rc::Rc;
 
+use futures_util::future::try_join_all;
+use gltf::Gltf;
+use image::DynamicImage;
 use kiss3d::{
     light::Light,
     nalgebra::{self as na, Point2, UnitQuaternion, Vector3},
@@ -12,6 +14,10 @@ use kiss3d::{
     window::{State, Window},
 };
 use url::Url;
+use wasm_bindgen::prelude::*;
+
+#[global_allocator]
+static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
 type Error = Box<dyn std::error::Error>;
 
@@ -26,57 +32,73 @@ impl State for AppState {
     }
 }
 
-fn main() {
+// #[async_std::main]
+#[wasm_bindgen(start)]
+pub async fn main() {
     let uri = std::env::var("GLTF_URL").unwrap();
+
+    let (gltf, buffers, images) = load_gltf(&uri).await.unwrap();
 
     let mut window = Window::new("Hi");
     window.set_light(Light::StickToCamera);
     let rot = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.014);
 
-    let c = load_resource(&uri).unwrap();
+    let c = load_scene(&gltf, &buffers, &images).unwrap();
     window.scene_mut().add_child(c.clone());
 
     let state = AppState { c, rot };
     window.render_loop(state)
 }
 
-fn load_resource(uri: &str) -> Result<SceneNode, Error> {
+async fn load_gltf(uri: &str) -> Result<(Gltf, Vec<Vec<u8>>, Vec<DynamicImage>), Error> {
     let base_url = Url::parse(uri)?;
     let options = Url::options().base_url(Some(&base_url));
-    let resp = ureq::get(uri).call();
-    if resp.error() {
-        return Err(resp.status_text().into());
-    }
-    let mut buf = vec![];
-    resp.into_reader().read_to_end(&mut buf)?;
-    let reader = std::io::Cursor::new(&buf[..]);
+    let mut resp = surf::get(uri).await?;
+    let buf = resp.body_bytes().await?;
+    let reader = io::Cursor::new(&buf);
     let gltf = gltf::Gltf::from_reader(reader)?;
 
-    let buffers = gltf
-        .buffers()
-        .map(|buf| {
-            println!("{} {:?}", buf.length(), buf.source());
-            Ok(match buf.source() {
-                gltf::buffer::Source::Uri(path) => {
-                    let uri = options.parse(path)?;
-                    let resp = ureq::get(uri.as_str()).call();
-                    if resp.error() {
-                        return Err(resp.status_text().into());
-                    }
-                    let mut buf = vec![];
-                    resp.into_reader().read_to_end(&mut buf)?;
-                    Cow::Owned(buf)
-                }
-                gltf::buffer::Source::Bin => Cow::Borrowed(gltf.blob.as_deref().unwrap()),
-            })
+    let buffers = gltf.buffers().map(|buf| async move {
+        println!("{} {:?}", buf.length(), buf.source());
+        Ok::<_, Error>(match buf.source() {
+            gltf::buffer::Source::Uri(path) => {
+                let uri = options.parse(path)?;
+                let mut resp = surf::get(uri.as_str()).await?;
+                let buf = resp.body_bytes().await?;
+                Some(buf)
+            }
+            gltf::buffer::Source::Bin => None,
         })
-        .collect::<Result<Vec<_>, Error>>()?;
+    });
+    let buffers = try_join_all(buffers)
+        .await?
+        .into_iter()
+        .map(|b| {
+            if let Some(buf) = b {
+                buf
+            } else {
+                gltf.blob.as_deref().unwrap().to_owned()
+            }
+        })
+        .collect::<Vec<_>>();
+    let images = gltf
+        .textures()
+        .map(|texture| load_image(texture, &options, &buffers));
+    let images = try_join_all(images).await?;
 
+    Ok((gltf, buffers, images))
+}
+
+fn load_scene(
+    gltf: &Gltf,
+    buffers: &[impl AsRef<[u8]>],
+    images: &[DynamicImage],
+) -> Result<SceneNode, Error> {
     let textures = TextureManager::get_global_manager(|manager| {
         gltf.textures()
-            .map(|texture| {
-                let img = load_image(&texture, &options, &buffers)?;
-                Ok(manager.add_image(img, texture.name().unwrap_or("")))
+            .zip(images)
+            .map(|(texture, image)| {
+                Ok(manager.add_image(image.clone(), texture.name().unwrap_or("")))
             })
             .collect::<Result<Vec<_>, Error>>()
     })?;
@@ -143,10 +165,10 @@ fn load_node(node: &gltf::Node, meshes: &[Rc<RefCell<Mesh>>]) -> SceneNode {
     scene
 }
 
-fn load_image(
-    texture: &gltf::Texture,
-    options: &url::ParseOptions,
-    buffers: &[impl AsRef<[u8]>],
+async fn load_image<'a>(
+    texture: gltf::Texture<'a>,
+    options: &'a url::ParseOptions<'a>,
+    buffers: &'a [impl AsRef<[u8]>],
 ) -> Result<image::DynamicImage, Error> {
     let image = texture.source();
     let img = match image.source() {
@@ -159,16 +181,15 @@ fn load_image(
         }
         gltf::image::Source::Uri { uri, mime_type } => {
             let uri = options.parse(uri)?;
-            let resp = ureq::get(uri.as_str()).call();
-            let format = if let Some(m) = mime_type.or_else(|| resp.header("Content-Type")) {
+            let mut resp = surf::get(uri.as_str()).await?;
+            let format = if let Some(m) =
+                mime_type.or_else(|| resp.header("Content-Type").map(|v| v.as_str()))
+            {
                 parse_mime_type(m)
             } else {
                 panic!();
             };
-            let mut buf = vec![];
-            resp.into_reader().read_to_end(&mut buf)?;
-            let reader = std::io::Cursor::new(&buf[..]);
-
+            let reader = io::Cursor::new(resp.body_bytes().await?);
             image::load(reader, format)?
         }
     };
