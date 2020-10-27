@@ -54,37 +54,38 @@ pub struct Engine {
     root: SceneNode,
 }
 
-// #[wasm_bindgen]
-// impl Engine {
-//     pub fn load_gltf(&self, uri: String) -> BoxFutureStatic<Result<(), JsValue>> {
-//         let mut root = self.root.clone();
-//         Box::pin(async move {
-//             let (gltf, buffers, images) = load_gltf(&uri).await.map_err(|e| e.to_string())?;
-//             let c = load_scene(&gltf, &buffers, &images).map_err(|e| e.to_string())?;
-//             root.add_child(c);
-//             Ok(())
-//         })
-//     }
-// }
+#[wasm_bindgen]
+impl Engine {
+    pub fn add_gltf(&self, data: GltfData) -> Result<(), JsValue> {
+        let mut root = self.root.clone();
+        let scene =
+            load_scene(&data.document, &data.buffers, &data.images).map_err(|e| e.to_string())?;
+        root.add_child(scene);
+        Ok(())
+    }
+}
 
-// #[wasm_bindgen]
-// pub async fn engine_load_gltf(engine: &Engine, uri: String) -> Result<(), JsValue> {
-//     let mut root = engine.root.clone();
-//     let (gltf, buffers, images) = load_gltf(&uri).await.map_err(|e| e.to_string())?;
-//     let c = load_scene(&gltf, &buffers, &images).map_err(|e| e.to_string())?;
-//     root.add_child(c);
-//     Ok(())
-// }
+#[wasm_bindgen]
+pub struct GltfData {
+    document: gltf::Document,
+    buffers: Vec<Vec<u8>>,
+    images: Vec<DynamicImage>,
+}
 
-async fn load_gltf(uri: &str) -> Result<(Gltf, Vec<Vec<u8>>, Vec<DynamicImage>), Error> {
-    let base_url = Url::parse(uri)?;
+#[wasm_bindgen]
+pub async fn load_gltf(uri: String) -> Result<GltfData, JsValue> {
+    load_gltf_impl(&uri).await.map_err(|e| e.to_string().into())
+}
+
+async fn load_gltf_impl(uri: &str) -> Result<GltfData, Error> {
+    let base_url = Url::parse(&uri)?;
     let options = Url::options().base_url(Some(&base_url));
     let mut resp = surf::get(uri).await?;
     let buf = resp.body_bytes().await?;
     let reader = io::Cursor::new(&buf);
-    let gltf = gltf::Gltf::from_reader(reader)?;
+    let Gltf { document, blob } = Gltf::from_reader(reader)?;
 
-    let buffers = gltf.buffers().map(|buf| async move {
+    let buffers = document.buffers().map(|buf| async move {
         println!("{} {:?}", buf.length(), buf.source());
         Ok::<_, Error>(match buf.source() {
             gltf::buffer::Source::Uri(path) => {
@@ -103,20 +104,24 @@ async fn load_gltf(uri: &str) -> Result<(Gltf, Vec<Vec<u8>>, Vec<DynamicImage>),
             if let Some(buf) = b {
                 buf
             } else {
-                gltf.blob.as_deref().unwrap().to_owned()
+                blob.as_deref().unwrap().to_owned()
             }
         })
         .collect::<Vec<_>>();
-    let images = gltf
+    let images = document
         .textures()
         .map(|texture| load_image(texture, &options, &buffers));
     let images = try_join_all(images).await?;
 
-    Ok((gltf, buffers, images))
+    Ok(GltfData {
+        document,
+        buffers,
+        images,
+    })
 }
 
 fn load_scene(
-    gltf: &Gltf,
+    gltf: &gltf::Document,
     buffers: &[impl AsRef<[u8]>],
     images: &[DynamicImage],
 ) -> Result<SceneNode, Error> {

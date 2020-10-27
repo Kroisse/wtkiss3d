@@ -1,5 +1,9 @@
+async function main({ init, load_gltf }) {
+    const engine = init();
+    const gltf = await load_gltf('');
+    engine.add_gltf(gltf);
+}
+
 import('./pkg')
-    .then(({ init }) => {
-        const engine = init();
-    })
+    .then(main)
     .catch(console.error);
