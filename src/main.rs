@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::io;
 use std::rc::Rc;
 
-use futures_util::future::try_join_all;
+use futures_util::future::{try_join_all, BoxFuture};
 use gltf::Gltf;
 use image::DynamicImage;
 use kiss3d::{
@@ -20,6 +20,7 @@ use wasm_bindgen::prelude::*;
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
 type Error = Box<dyn std::error::Error>;
+type BoxFutureStatic<T> = BoxFuture<'static, T>;
 
 struct AppState {
     c: SceneNode,
@@ -33,22 +34,47 @@ impl State for AppState {
 }
 
 // #[async_std::main]
-#[wasm_bindgen(start)]
-pub async fn main() {
-    let uri = std::env::var("GLTF_URL").unwrap();
-
-    let (gltf, buffers, images) = load_gltf(&uri).await.unwrap();
-
+#[wasm_bindgen]
+pub fn init() -> Result<Engine, JsValue> {
     let mut window = Window::new("Hi");
     window.set_light(Light::StickToCamera);
-    let rot = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.014);
+    let rot = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.014);
 
-    let c = load_scene(&gltf, &buffers, &images).unwrap();
+    let c = SceneNode::new_empty();
     window.scene_mut().add_child(c.clone());
 
-    let state = AppState { c, rot };
-    window.render_loop(state)
+    let state = AppState { c: c.clone(), rot };
+    window.render_loop(state);
+
+    Ok(Engine { root: c })
 }
+
+#[wasm_bindgen]
+pub struct Engine {
+    root: SceneNode,
+}
+
+// #[wasm_bindgen]
+// impl Engine {
+//     pub fn load_gltf(&self, uri: String) -> BoxFutureStatic<Result<(), JsValue>> {
+//         let mut root = self.root.clone();
+//         Box::pin(async move {
+//             let (gltf, buffers, images) = load_gltf(&uri).await.map_err(|e| e.to_string())?;
+//             let c = load_scene(&gltf, &buffers, &images).map_err(|e| e.to_string())?;
+//             root.add_child(c);
+//             Ok(())
+//         })
+//     }
+// }
+
+// #[wasm_bindgen]
+// pub async fn engine_load_gltf(engine: &Engine, uri: String) -> Result<(), JsValue> {
+//     let mut root = engine.root.clone();
+//     let (gltf, buffers, images) = load_gltf(&uri).await.map_err(|e| e.to_string())?;
+//     let c = load_scene(&gltf, &buffers, &images).map_err(|e| e.to_string())?;
+//     root.add_child(c);
+//     Ok(())
+// }
 
 async fn load_gltf(uri: &str) -> Result<(Gltf, Vec<Vec<u8>>, Vec<DynamicImage>), Error> {
     let base_url = Url::parse(uri)?;
