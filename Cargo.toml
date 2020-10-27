@@ -24,6 +24,8 @@ wee_alloc = "0.4"
 
 [profile.dev]
 lto = 'thin'
+opt-level = 1
 
 [profile.release]
 lto = true
+opt-level = "s"

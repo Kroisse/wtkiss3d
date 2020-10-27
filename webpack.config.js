@@ -23,8 +23,11 @@ module.exports = {
             TextEncoder: ['text-encoding', 'TextEncoder']
         })
     ],
-    experiments: {
-        asyncWebAssembly: true,
+    devServer: {
+        host: '0.0.0.0',
     },
-    mode: 'production'
+    experiments: {
+        syncWebAssembly: true
+    },
+    mode: 'development'
 };
