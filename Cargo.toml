@@ -13,7 +13,7 @@ path = "src/main.rs"
 [dependencies]
 # async-std = { version = "1.6", features = ["attributes"] }
 futures-util = "0.3"
-gltf = "0.15"
+gltf = { version = "0.15", default-features = false, features = ["names", "utils"] }
 image = { version = "0.22", default-features = false, features = ["jpeg", "png"] }
 kiss3d = "0.26"
 surf = { version = "2.1", default-features = false, features = ["encoding", "wasm-client"] }
