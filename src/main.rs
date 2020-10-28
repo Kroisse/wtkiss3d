@@ -6,8 +6,9 @@ use futures_util::future::{try_join_all, BoxFuture};
 use gltf::Gltf;
 use image::DynamicImage;
 use kiss3d::{
+    camera::ArcBall,
     light::Light,
-    nalgebra::{self as na, Point2, UnitQuaternion, Vector3},
+    nalgebra::{self as na, Point2, Point3, UnitQuaternion, Vector3},
     ncollide3d::math::Point,
     resource::{Mesh, MeshManager, TextureManager},
     scene::SceneNode,
@@ -24,12 +25,24 @@ type BoxFutureStatic<T> = BoxFuture<'static, T>;
 
 struct AppState {
     c: SceneNode,
+    camera: ArcBall,
     rot: UnitQuaternion<f32>,
 }
 
 impl State for AppState {
     fn step(&mut self, _: &mut Window) {
         self.c.prepend_to_local_rotation(&self.rot);
+    }
+
+    fn cameras_and_effect_and_renderer(
+        &mut self,
+    ) -> (
+        Option<&mut dyn kiss3d::camera::Camera>,
+        Option<&mut dyn kiss3d::planar_camera::PlanarCamera>,
+        Option<&mut dyn kiss3d::renderer::Renderer>,
+        Option<&mut dyn kiss3d::post_processing::PostProcessingEffect>,
+    ) {
+        (Some(&mut self.camera), None, None, None)
     }
 }
 
@@ -43,7 +56,13 @@ pub fn init() -> Result<Engine, JsValue> {
     let c = SceneNode::new_empty();
     window.scene_mut().add_child(c.clone());
 
-    let state = AppState { c: c.clone(), rot };
+    let camera = ArcBall::new(Point3::new(0., 25., 50.), Point3::origin());
+
+    let state = AppState {
+        camera,
+        c: c.clone(),
+        rot,
+    };
     window.render_loop(state);
 
     Ok(Engine { root: c })
