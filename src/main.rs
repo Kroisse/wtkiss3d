@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::io;
 use std::rc::Rc;
 
-use futures_util::future::{try_join_all, BoxFuture};
+use futures_util::future::try_join_all;
 use gltf::Gltf;
 use image::DynamicImage;
 use kiss3d::{
@@ -10,7 +10,7 @@ use kiss3d::{
     light::Light,
     nalgebra::{self as na, Point2, Point3, UnitQuaternion, Vector3},
     ncollide3d::math::Point,
-    resource::{Mesh, MeshManager, TextureManager},
+    resource::{Mesh, MeshManager, Texture, TextureManager},
     scene::SceneNode,
     window::{State, Window},
 };
@@ -21,7 +21,6 @@ use wasm_bindgen::prelude::*;
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
 type Error = Box<dyn std::error::Error>;
-type BoxFutureStatic<T> = BoxFuture<'static, T>;
 
 struct AppState {
     c: SceneNode,
@@ -51,10 +50,12 @@ impl State for AppState {
 pub fn init() -> Result<Engine, JsValue> {
     let mut window = Window::new("Hi");
     window.set_light(Light::StickToCamera);
-    let rot = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.014);
 
-    let c = SceneNode::new_empty();
-    window.scene_mut().add_child(c.clone());
+    let rot = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.014);
+    let mut c = window.add_group();
+    c.set_local_scale(0.01, 0.01, 0.01);
+    let mut floor = c.add_cube(3000., 2., 3000.);
+    floor.set_local_translation(na::Translation3::new(0., -1., 0.));
 
     let camera = ArcBall::new(Point3::new(0., 25., 50.), Point3::origin());
 
@@ -155,11 +156,7 @@ fn load_scene(
 
     let meshes = MeshManager::get_global_manager(|manager| {
         gltf.meshes()
-            .map(|m| {
-                let mesh = load_mesh(&m, &buffers);
-                manager.add(Rc::clone(&mesh), m.name().unwrap_or(""));
-                mesh
-            })
+            .map(|m| load_mesh(&m, &buffers, &textures))
             .collect::<Vec<_>>()
     });
 
@@ -186,13 +183,10 @@ fn parse_mime_type(mime_type: &str) -> image::ImageFormat {
     }
 }
 
-fn load_node(node: &gltf::Node, meshes: &[Rc<RefCell<Mesh>>]) -> SceneNode {
+fn load_node(node: &gltf::Node, meshes: &[SceneNode]) -> SceneNode {
     let mut scene = SceneNode::new_empty();
     if let Some(mesh) = node.mesh() {
-        scene.add_mesh(
-            Rc::clone(&meshes[mesh.index()]),
-            Vector3::from_element(0.01),
-        );
+        scene.add_child(meshes[mesh.index()].clone());
     }
     for child in node.children() {
         scene.add_child(load_node(&child, meshes));
@@ -246,7 +240,11 @@ async fn load_image<'a>(
     Ok(img)
 }
 
-fn load_mesh(mesh: &gltf::Mesh, buffers: &[impl AsRef<[u8]>]) -> Rc<RefCell<Mesh>> {
+fn load_mesh(
+    mesh: &gltf::Mesh,
+    buffers: &[impl AsRef<[u8]>],
+    textures: &[Rc<Texture>],
+) -> SceneNode {
     let prim = mesh.primitives().next().unwrap();
 
     let reader = prim.reader(|b| buffers.get(b.index()).map(AsRef::as_ref));
@@ -274,11 +272,26 @@ fn load_mesh(mesh: &gltf::Mesh, buffers: &[impl AsRef<[u8]>]) -> Rc<RefCell<Mesh
             })
             .collect()
     };
-    let uvs = reader
-        .read_tex_coords(0)
-        .map(|tex| tex.into_f32().map(Point2::from).collect());
+
+    let (tex, uvs) = if let Some(tex) = &prim
+        .material()
+        .pbr_metallic_roughness()
+        .base_color_texture()
+    {
+        let uvs = reader
+            .read_tex_coords(tex.tex_coord())
+            .map(|tex| tex.into_f32().map(Point2::from).collect());
+        (Some(&textures[tex.texture().index()]), uvs)
+    } else {
+        (None, None)
+    };
 
     let m = Mesh::new(coords, faces, normals, uvs, false);
     let m = Rc::new(RefCell::new(m));
-    m
+    let mut s = SceneNode::new_empty();
+    s.add_mesh(m, Vector3::from_element(1.));
+    if let Some(tex) = tex {
+        s.set_texture(Rc::clone(tex));
+    }
+    s
 }
