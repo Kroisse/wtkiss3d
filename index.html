@@ -1,21 +1,27 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <meta charset="utf-8" />
-    <style>
-      canvas {
-        width: 800px;
-        height: 600px;
-      }
-    </style>
-  </head>
 
-  <body>
-    <canvas
-      oncontextmenu="return false;"
-      id="canvas"
-      width="800"
-      height="600"
-    ></canvas>
-  </body>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    canvas {
+      width: 800px;
+      height: 600px;
+    }
+  </style>
+</head>
+
+<body>
+  <form id="load-gltf">
+    <p>
+      <label>glTF URL:</label>
+      <input type="url" id="gltf-url" />
+      <button type="submit">Load</button>
+    </p>
+  </form>
+  <p>
+    <canvas oncontextmenu="return false;" id="canvas" width="800" height="600"></canvas>
+  </p>
+</body>
+
 </html>
