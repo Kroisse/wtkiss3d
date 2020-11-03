@@ -2643,11 +2643,13 @@ dependencies = [
  "futures-util",
  "gltf",
  "image",
+ "js-sys",
  "kiss3d",
  "surf",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
  "wee_alloc",
 ]
 

@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use futures_util::future::try_join_all;
 use gltf::Gltf;
-use image::DynamicImage;
+use image::{DynamicImage, ImageBuffer};
 use kiss3d::{
     camera::ArcBall,
     light::Light,
@@ -15,7 +15,8 @@ use kiss3d::{
     window::{State, Window},
 };
 use url::Url;
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::{prelude::*, JsCast};
+use web_sys::ImageData;
 
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
@@ -43,6 +44,13 @@ impl State for AppState {
     ) {
         (Some(&mut self.camera), None, None, None)
     }
+}
+
+#[cfg_attr(rustfmt, rustfmt_skip)]
+#[wasm_bindgen(module = "/js/util.js")]
+extern "C" {
+    #[wasm_bindgen(catch)]
+    async fn fetch_image(uri: &str) -> Result<JsValue, JsValue>;
 }
 
 // #[async_std::main]
@@ -213,7 +221,7 @@ async fn load_image<'a>(
     texture: gltf::Texture<'a>,
     options: &'a url::ParseOptions<'a>,
     buffers: &'a [impl AsRef<[u8]>],
-) -> Result<image::DynamicImage, Error> {
+) -> Result<DynamicImage, Error> {
     let image = texture.source();
     let img = match image.source() {
         gltf::image::Source::View { view, mime_type } => {
@@ -225,16 +233,10 @@ async fn load_image<'a>(
         }
         gltf::image::Source::Uri { uri, mime_type } => {
             let uri = options.parse(uri)?;
-            let mut resp = surf::get(uri.as_str()).await?;
-            let format = if let Some(m) =
-                mime_type.or_else(|| resp.header("Content-Type").map(|v| v.as_str()))
-            {
-                parse_mime_type(m)
-            } else {
-                panic!();
-            };
-            let reader = io::Cursor::new(resp.body_bytes().await?);
-            image::load(reader, format)?
+            let data = unsafe { fetch_image(uri.as_str()).await.unwrap() };
+            let data = data.dyn_into::<ImageData>().unwrap();
+            let buf = ImageBuffer::from_raw(data.width(), data.height(), data.data().0).unwrap();
+            DynamicImage::ImageRgba8(buf)
         }
     };
     Ok(img)
